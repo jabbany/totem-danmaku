@@ -103,7 +103,9 @@ class CoreComment ():
         self.ttl = self.DEFAULT_LIFETIME
         # init default positions
         self._y = 0
+        self._x = 0
         self._width = None
+        self._height = None
         self._drawObject = None
         
     def set_duration (self, duration, reset = False):
@@ -115,6 +117,75 @@ class CoreComment ():
     def get_font_string (self):
         return " ".join([self.font, str(self.size) + "px"])
 
+class SpaceAllocator ():
+    width = 0
+    height = 0
+    pools = [[]]
+    
+    def add(self, comment):
+        if comment._height > self.height:
+            comment._cid = -1;
+            comment._y = 0;
+        else:
+            comment._y = self.allocate(comment, 0);
+            # we should keep the pools sorted but what the heck this is a simpler impl
+            self.pools[comment._cid].append(comment)
+    
+    def allocate(self, comment, cindex = 0):
+        # try to see if the comment can fit in the given pool
+        while len(self.pools) <= cindex:
+            self.pools.append([])
+        
+        pool = self.pools[cindex]
+        if len(pool) == 0:
+            comment._cid = cindex;
+            return 0;
+        if self.path_check(comment, 0, pool):
+            comment._cid = cindex;
+            return 0;
+        for cmt in pool:
+            y = cmt._y + cmt._height + 1
+            if y + comment._height > self.height:
+                continue;
+            else:
+                if self.path_check(comment, y, pool):
+                    comment._cid = cindex;
+                    return y
+                else:
+                    continue
+        return self.allocate(comment, cindex + 1)
+            
+    def will_collide(self, A, B):
+        # naive way to do collision detection
+        return A.stime + A.ttl >= B.stime + B.ttl / 2;
+        
+    def path_check(self, target, y, pool = None):
+        if pool == None:
+            pool = pools[0]
+        
+        for comment in pool:
+            if comment._y > y + target._height or comment._y + comment._height < y:
+                continue; # not related comment
+            elif comment._x + comment._width < target._x or comment._x > target._x + target._width:
+                if self.will_collide(target, comment):
+                    return False
+                else:
+                    continue;
+            else:
+                return False
+        return True # no conflicts found
+            
+    def free(self, comment):
+        if comment._cid >= 0:
+            pool = pools[comment._cid]
+            pool.remove(comment)
+            return
+        return
+    
+    def set_bounds(self, width, height):
+        self.width = width
+        self.height = height
+
 class CommentManager (Clutter.Actor):
     def __init__(self, totem):
         super(Clutter.Actor, self).__init__()
@@ -124,6 +195,8 @@ class CommentManager (Clutter.Actor):
         self._timeline_keys = []
         self.position = 0
         self.playtime = 0
+        
+        self.allocator = SpaceAllocator()
         
         self.width = None
         self.height = None
@@ -210,10 +283,11 @@ class CommentManager (Clutter.Actor):
         comment._shadowBL = shadowBL
         comment._shadowTR = shadowTR
         
-        if comment._width == None:
-            comment._width = comment._drawObject.get_width()
-        x = float(self.width + comment._width)
-        
+        if comment._width == None or comment._height == None:
+            comment._width = comment._drawObject.get_width() + 1
+            comment._height = comment._drawObject.get_height() + 1
+        comment._x = float(self.width + comment._width)
+        x = comment._x
         # set position
         comment._drawObject.set_position(x, comment._y)
         comment._shadowBR.set_position(x + 1, comment._y + 1)
@@ -227,6 +301,8 @@ class CommentManager (Clutter.Actor):
         self.add_child(shadowTR)
         self.add_child(text)
         
+        self.allocator.add(comment)
+        
         self.runline.append(comment)
         
     def timer(self, *args):
@@ -235,9 +311,11 @@ class CommentManager (Clutter.Actor):
             return True
         for cmt in self.runline:
             if cmt.mode == 1:
-                if cmt._width == None:
-                    cmt._width = cmt._drawObject.get_width()
-                x = (cmt.ttl / float(cmt.dur)) * float(self.width + cmt._width) - cmt._width
+                if cmt._width == None or cmt._height == None:
+                    cmt._width = cmt._drawObject.get_width() + 1
+                    cmt._height = cmt._drawObject.get_height() + 1
+                cmt._x = (cmt.ttl / float(cmt.dur)) * float(self.width + cmt._width) - cmt._width
+                x = cmt._x
                 cmt._drawObject.set_position(x, cmt._y)
                 cmt._shadowBR.set_position(x + 1, cmt._y + 1)
                 cmt._shadowTL.set_position(x - 1, cmt._y - 1)
@@ -257,13 +335,13 @@ class CommentManager (Clutter.Actor):
         s_width = stage.get_width() 
         self.width = s_width
         self.height = s_height
-        
+        self.allocator.set_bounds(self.width, self.height)
         # Set actor dimensions
         self.set_position(0,0);
         self.set_size(s_width, s_height)
         
         return False
-        
+ 
 # Methods
 def parseBilibiliFormat(text):
     # instead of actually taking time to parse, we'll be lazy and use minidom
