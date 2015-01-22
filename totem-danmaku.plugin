@@ -1,0 +1,9 @@
+[Plugin]
+Loader=python
+Module=totem-danmaku
+IAge=1
+Name=Totem Danmaku Support
+Description=Load danmaku when playing video in totem
+Authors=Jim Chen <knh.jabbany@gmail.com>
+Copyright=Copyright (C) 2015 Jim Chen
+Website=http://www.gnome.org/projects/totem/
