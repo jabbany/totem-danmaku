@@ -26,7 +26,12 @@
 
 from gi.repository import GObject, Peas, Gtk, GLib, GtkClutter, Clutter, Pango # pylint: disable-msg=E0611
 import bisect
-import sys
+import time
+import struct
+import re
+import xml.dom.minidom as domParser
+import urllib2, gzip, zlib
+from StringIO import StringIO
 
 class DanmakuPlugin (GObject.Object, Peas.Activatable):
     __gtype_name__ = 'DanmakuPlugin'
@@ -53,8 +58,12 @@ class DanmakuPlugin (GObject.Object, Peas.Activatable):
         self._play_signal_handler = self._totem.connect("file-has-played", self.play_handler)
         self._end_signal_handler = video.connect("eos", self.end_handler)
         # debugging
-        cmt = CoreComment(1, '你好', 0)
-        self._cm.load([cmt])
+        cmt1 = CoreComment(1, '你好', 0)
+        cmt2 = CoreComment(1, '你好2', 1000)
+        cmt3 = CoreComment(1, '你好3', 2000)
+        cmt4 = CoreComment(1, '你好4', 3000)
+        comments = remoteDanmaku("http://comment.bilibili.com/2436966.xml")
+        self._cm.load(comments)
 
     def do_deactivate (self):
         # Include the plugin destroying Actions
@@ -105,7 +114,7 @@ class CoreComment ():
             self.ttl = duration
     def get_font_string (self):
         return " ".join([self.font, str(self.size) + "px"])
-    
+
 class CommentManager (Clutter.Actor):
     def __init__(self, totem):
         super(Clutter.Actor, self).__init__()
@@ -122,7 +131,8 @@ class CommentManager (Clutter.Actor):
         self.isPlaying = False
         
         # bind timers
-        GLib.timeout_add(41, self.timer)
+        GLib.timeout_add(20, self.timer)
+        self._timerTime = time.time() * 1000
         
     def load(self, timeline):
         # Maintains a sorted timeline
@@ -155,6 +165,10 @@ class CommentManager (Clutter.Actor):
         for cmt in self.runline:
             if cmt.ttl <= 0:
                 self.remove_child(cmt._drawObject)
+                self.remove_child(cmt._shadowBR)
+                self.remove_child(cmt._shadowBL)
+                self.remove_child(cmt._shadowTR)
+                self.remove_child(cmt._shadowTL)
         self.runline = [cmt for cmt in self.runline if cmt.ttl > 0]
         
         # Draw the comments and age them
@@ -168,17 +182,56 @@ class CommentManager (Clutter.Actor):
         text.set_color(Clutter.Color.from_string(comment.color)[1]);
         text.set_text(comment.text)
         text.set_font_name(comment.get_font_string())
+        
+        # Add a few extra text objects
+        shadowBR = Clutter.Text()
+        shadowBR.set_color(Clutter.Color.from_string("#000000")[1]);
+        shadowBR.set_text(comment.text)
+        shadowBR.set_font_name(comment.get_font_string())
+        
+        shadowTL = Clutter.Text()
+        shadowTL.set_color(Clutter.Color.from_string("#000000")[1]);
+        shadowTL.set_text(comment.text)
+        shadowTL.set_font_name(comment.get_font_string())
+        
+        shadowBL = Clutter.Text()
+        shadowBL.set_color(Clutter.Color.from_string("#000000")[1]);
+        shadowBL.set_text(comment.text)
+        shadowBL.set_font_name(comment.get_font_string())
+        
+        shadowTR = Clutter.Text()
+        shadowTR.set_color(Clutter.Color.from_string("#000000")[1]);
+        shadowTR.set_text(comment.text)
+        shadowTR.set_font_name(comment.get_font_string())
+        
         comment._drawObject = text
+        comment._shadowBR = shadowBR
+        comment._shadowTL = shadowTL
+        comment._shadowBL = shadowBL
+        comment._shadowTR = shadowTR
+        
         if comment._width == None:
             comment._width = comment._drawObject.get_width()
         x = float(self.width + comment._width)
+        
+        # set position
         comment._drawObject.set_position(x, comment._y)
+        comment._shadowBR.set_position(x + 1, comment._y + 1)
+        comment._shadowTL.set_position(x - 1, comment._y - 1)
+        comment._shadowBL.set_position(x - 1, comment._y + 1)
+        comment._shadowTR.set_position(x + 1, comment._y - 1)
+        # add text and shadow
+        self.add_child(shadowBR)
+        self.add_child(shadowTL)
+        self.add_child(shadowBL)
+        self.add_child(shadowTR)
         self.add_child(text)
         
         self.runline.append(comment)
         
     def timer(self, *args):
         if not self.isPlaying:
+            self._timerTime = time.time() * 1000
             return True
         for cmt in self.runline:
             if cmt.mode == 1:
@@ -186,7 +239,12 @@ class CommentManager (Clutter.Actor):
                     cmt._width = cmt._drawObject.get_width()
                 x = (cmt.ttl / float(cmt.dur)) * float(self.width + cmt._width) - cmt._width
                 cmt._drawObject.set_position(x, cmt._y)
-                cmt.ttl -= 41
+                cmt._shadowBR.set_position(x + 1, cmt._y + 1)
+                cmt._shadowTL.set_position(x - 1, cmt._y - 1)
+                cmt._shadowBL.set_position(x - 1, cmt._y + 1)
+                cmt._shadowTR.set_position(x + 1, cmt._y - 1)
+                cmt.ttl -= (time.time() * 1000 - self._timerTime)
+        self._timerTime = time.time() * 1000
         return True
     
     def state_change(self, *arg):
@@ -205,3 +263,46 @@ class CommentManager (Clutter.Actor):
         self.set_size(s_width, s_height)
         
         return False
+        
+# Methods
+def parseBilibiliFormat(text):
+    # instead of actually taking time to parse, we'll be lazy and use minidom
+    try:
+        dom = domParser.parseString(text.decode('utf-8'))
+        comments = dom.getElementsByTagName('d')
+        for comment in comments:
+            try:
+                params = str(comment.getAttribute('p')).split(',')
+                color = int(params[3])
+                rgb = int(color / 65536), int((color % 65536) / 256), color % 25656
+                yield CoreComment(int(params[1]), str(comment.childNodes[0].wholeText).replace('/n',"\n"), float(params[0]) * 1000, "#" + struct.pack('BBB',*rgb).encode('hex'), int(params[2]))
+            except Exception as e:
+                continue; # ignore all exceptions
+    except Exception:
+        for comment in re.finditer(r'd p="(.+)">(.+)</', text):
+            params = comment.group(1).split(',')
+            ctext = comment.group(2)
+            color = int(params[3])
+            rgb = int(color / 65536), int((color % 65536) / 256), color % 256
+            yield CoreComment(int(params[1]), ctext.replace('/n',"\n"), float(params[0]) * 1000, "#" + struct.pack('BBB',*rgb).encode('hex'), float(params[2]))
+
+def remoteDanmaku(url):
+    request = urllib2.Request(url)
+    request.add_header('Accept-encoding', 'gzip')
+    response = urllib2.urlopen(request)
+    if response.info().get('Content-Encoding') == 'gzip':
+        buf = StringIO( response.read())
+        f = gzip.GzipFile(fileobj=buf)
+        data = f.read()
+        fl = open('file','w')
+        fl.write(data);
+        fl.close()
+        return [comment for comment in parseBilibiliFormat(data)]
+    elif response.info().get('Content-Encoding') == 'deflate':
+        return [comment for comment in parseBilibiliFormat(zlib.decompressobj(-zlib.MAX_WBITS).decompress(response.read()))]
+    else:
+        return [comment for comment in parseBilibiliFormat(response.read())]
+        
+if __name__ == '__main__':
+    for dm in remoteDanmaku("http://comment.bilibili.com/2952655.xml"):
+        print dm.text, dm.color
