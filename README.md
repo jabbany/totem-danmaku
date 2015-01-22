@@ -1,4 +1,7 @@
 # totem-danmaku
+
+![Screenshot](screenshot.png)
+
 Totem-danmaku brings danmaku comment support to totem player. This enables Totem
 users to load danmaku comments both locally and remotely and play it along with 
 the current video

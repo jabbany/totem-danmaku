@@ -58,11 +58,7 @@ class DanmakuPlugin (GObject.Object, Peas.Activatable):
         self._play_signal_handler = self._totem.connect("file-has-played", self.play_handler)
         self._end_signal_handler = video.connect("eos", self.end_handler)
         # debugging
-        cmt1 = CoreComment(1, '你好', 0)
-        cmt2 = CoreComment(1, '你好2', 1000)
-        cmt3 = CoreComment(1, '你好3', 2000)
-        cmt4 = CoreComment(1, '你好4', 3000)
-        comments = remoteDanmaku("http://comment.bilibili.com/2436966.xml")
+        comments = remoteDanmaku("http://comment.bilibili.com/2436827.xml")
         self._cm.load(comments)
 
     def do_deactivate (self):
@@ -130,7 +126,7 @@ class SpaceAllocator ():
             comment._y = self.allocate(comment, 0);
             # we should keep the pools sorted but what the heck this is a simpler impl
             self.pools[comment._cid].append(comment)
-    
+            
     def allocate(self, comment, cindex = 0):
         # try to see if the comment can fit in the given pool
         while len(self.pools) <= cindex:
@@ -143,13 +139,15 @@ class SpaceAllocator ():
         if self.path_check(comment, 0, pool):
             comment._cid = cindex;
             return 0;
-        for cmt in pool:
-            y = cmt._y + cmt._height + 1
+        ypool = [(cmt._y + cmt._height + 1) for cmt in pool]
+        ypool.sort()
+        for y in ypool:
             if y + comment._height > self.height:
                 continue;
             else:
                 if self.path_check(comment, y, pool):
                     comment._cid = cindex;
+                    
                     return y
                 else:
                     continue
@@ -167,7 +165,7 @@ class SpaceAllocator ():
             if comment._y > y + target._height or comment._y + comment._height < y:
                 continue; # not related comment
             elif comment._x + comment._width < target._x or comment._x > target._x + target._width:
-                if self.will_collide(target, comment):
+                if self.will_collide(comment, target):
                     return False
                 else:
                     continue;
@@ -177,10 +175,11 @@ class SpaceAllocator ():
             
     def free(self, comment):
         if comment._cid >= 0:
-            pool = pools[comment._cid]
-            pool.remove(comment)
-            return
-        return
+            if len(self.pools) > comment._cid:
+                if comment in self.pools[comment._cid]:
+                    self.pools[comment._cid].remove(comment)
+                else:
+                    raise Exception([comment._cid, comment.text, self.pools[comment._cid], comment])
     
     def set_bounds(self, width, height):
         self.width = width
@@ -235,14 +234,18 @@ class CommentManager (Clutter.Actor):
                 self.send(self.timeline[i])
                 
         # Remove comments which are dead
+        prepare = []
         for cmt in self.runline:
             if cmt.ttl <= 0:
+                self.allocator.free(cmt)
+                prepare.append(cmt)
                 self.remove_child(cmt._drawObject)
                 self.remove_child(cmt._shadowBR)
                 self.remove_child(cmt._shadowBL)
                 self.remove_child(cmt._shadowTR)
                 self.remove_child(cmt._shadowTL)
-        self.runline = [cmt for cmt in self.runline if cmt.ttl > 0]
+        for cmt in prepare:
+            self.runline.remove(cmt)
         
         # Draw the comments and age them
         self.playtime = time
@@ -250,7 +253,8 @@ class CommentManager (Clutter.Actor):
     def send(self, comment):
         if not isinstance(comment, CoreComment):
             raise Exception('Must pass a CoreComment in order to send')
-        
+        if comment.mode != 1:
+            return; # Only support scrolling for now
         text = Clutter.Text()
         text.set_color(Clutter.Color.from_string(comment.color)[1]);
         text.set_text(comment.text)
