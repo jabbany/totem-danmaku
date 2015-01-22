@@ -66,6 +66,9 @@ class DanmakuPlugin (GObject.Object, Peas.Activatable):
         self._totem = None
     
     def seek_handler (self, video, forward, user_data):
+        if not forward:
+            self._cm.clear()
+        self._cm.time(video.get_current_time())
         self._cm.set_bounds()
     
     def tick_handler (self, video, cur_time, st_length, cur_pos, user_data):
@@ -79,8 +82,9 @@ class DanmakuPlugin (GObject.Object, Peas.Activatable):
     def play_handler (self, murl, user_data):
         self._cm.resume()
         
-    def end_handler (self, video, user_data):
+    def end_handler (self, user_data):
         self._cm.stop()
+        self._cm.clear()
 
 class CoreComment ():
 
@@ -226,6 +230,12 @@ class CommentManager (Clutter.Actor):
     	# Check if UI is ready
     	if self.width == None or self.height == None:
     	    return;
+    	# Check if we're doing a large jump
+    	if time - self.playtime > 2000:
+    	    self.playtime = time
+    	    self.seek(time)
+    	    self.clear()
+    	    return
         # Update time
         old_pos = self.position
         self.seek(time)
@@ -329,6 +339,17 @@ class CommentManager (Clutter.Actor):
         self._timerTime = time.time() * 1000
         return True
     
+    def clear(self):
+        for cmt in self.runline:
+            if cmt.mode == 1:
+                self.allocator.free(cmt)
+            self.remove_child(cmt._drawObject)
+            self.remove_child(cmt._shadowBR)
+            self.remove_child(cmt._shadowBL)
+            self.remove_child(cmt._shadowTR)
+            self.remove_child(cmt._shadowTL)
+        self.runline = []
+   
     def state_change(self, *arg):
         self.set_bounds()
         return False
